@@ -90,12 +90,12 @@ async function api(path, body) {
 function logout() { token = null; store.set('token', null); clearTimeout(timer); if (channel) { rt.removeChannel(channel); channel = null; } setLive(false); $('#app').classList.add('hidden'); $('#login').classList.remove('hidden'); }
 function showApp() { $('#login').classList.add('hidden'); $('#app').classList.remove('hidden'); lastId = 0; $('#msgs').innerHTML = ''; tick(); loadFiles(); schedule(); connectLive(); }
 
-// Live updates when the websocket is up; otherwise poll every 2s on screen, 30s in background.
+// Live nudges when the websocket is up (10s safety poll); otherwise poll every 2s. Background tabs: 30s.
 function setLive(on) { live = on; $('#live').textContent = on ? '● live' : '● polling'; $('#live').classList.toggle('on', on); }
 function schedule() {
   clearTimeout(timer);
   if (!token) return;
-  timer = setTimeout(async () => { await tick(); schedule(); }, live || document.hidden ? 30000 : 2000);
+  timer = setTimeout(async () => { await tick(); schedule(); }, document.hidden ? 30000 : live ? 10000 : 2000);
 }
 document.addEventListener('visibilitychange', () => { if (token && !document.hidden) tick(); schedule(); });
 async function connectLive() {
