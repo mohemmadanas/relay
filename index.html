@@ -20,6 +20,8 @@
   header { display:flex; gap:8px; align-items:center; padding:10px 16px; border-bottom:1px solid var(--line); }
   header b { flex:1; }
   header input { width:90px; padding:6px 8px; }
+  #live { font-size:12px; color:var(--dim); }
+  #live.on { color:#3ecf8e; }
   #msgs { flex:1; overflow-y:auto; padding:16px; display:flex; flex-direction:column; gap:8px; }
   .m { max-width:75%; padding:8px 12px; border-radius:10px; background:var(--panel); white-space:pre-wrap; word-break:break-word; }
   .m.me { align-self:flex-end; background:var(--me); }
@@ -47,7 +49,7 @@
 
 <div id="app" class="hidden">
   <section id="chat">
-    <header><b>Relay</b> name <input id="who"> <button class="ghost" id="out">Log out</button></header>
+    <header><b>Relay</b> <span id="live" title="live = instant updates; polling = checks every few seconds">● polling</span> name <input id="who"> <button class="ghost" id="out">Log out</button></header>
     <div id="msgs"></div>
     <form id="send"><textarea id="txt" placeholder="Message (Enter to send, Shift+Enter newline)"></textarea><button>Send</button></form>
   </section>
@@ -59,14 +61,18 @@
   </aside>
 </div>
 
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.49.4/dist/umd/supabase.min.js"></script>
 <script>
+// Public anon key: only opens the content-free "changed" channel; tables and files are locked to the API.
+const SB_URL = 'https://cdzfidmmdscwskxjjnjn.supabase.co';
+const SB_ANON = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImNkemZpZG1tZHNjd3NreGpqbmpuIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTE5Njk0MzksImV4cCI6MjEwNzU0NTQzOX0.TUbb0ugYnvPhUTeQtA5I5FuaQcW9kSdjThKGCk1UYZo';
 const API = 'https://cdzfidmmdscwskxjjnjn.supabase.co/functions/v1/relay';
 const $ = s => document.querySelector(s);
 const store = {
   get: k => { try { return sessionStorage.getItem(k); } catch { return null; } },
   set: (k, v) => { try { v == null ? sessionStorage.removeItem(k) : sessionStorage.setItem(k, v); } catch {} },
 };
-let token = store.get('token'), lastId = 0, timer;
+let token = store.get('token'), lastId = 0, timer, rt, channel, live = false;
 const who = $('#who');
 who.value = (() => { try { return localStorage.getItem('who'); } catch { return null; } })()
   || (/Windows/.test(navigator.userAgent) ? 'PC' : /Mac/.test(navigator.userAgent) ? 'Mac' : 'Phone');
@@ -81,8 +87,27 @@ async function api(path, body) {
   if (!r.ok) throw new Error(d.error || r.status);
   return d;
 }
-function logout() { token = null; store.set('token', null); clearInterval(timer); $('#app').classList.add('hidden'); $('#login').classList.remove('hidden'); }
-function showApp() { $('#login').classList.add('hidden'); $('#app').classList.remove('hidden'); lastId = 0; $('#msgs').innerHTML = ''; tick(); loadFiles(); timer = setInterval(tick, 2000); }
+function logout() { token = null; store.set('token', null); clearTimeout(timer); if (channel) { rt.removeChannel(channel); channel = null; } setLive(false); $('#app').classList.add('hidden'); $('#login').classList.remove('hidden'); }
+function showApp() { $('#login').classList.add('hidden'); $('#app').classList.remove('hidden'); lastId = 0; $('#msgs').innerHTML = ''; tick(); loadFiles(); schedule(); connectLive(); }
+
+// Live updates when the websocket is up; otherwise poll every 2s on screen, 30s in background.
+function setLive(on) { live = on; $('#live').textContent = on ? '● live' : '● polling'; $('#live').classList.toggle('on', on); }
+function schedule() {
+  clearTimeout(timer);
+  if (!token) return;
+  timer = setTimeout(async () => { await tick(); schedule(); }, live || document.hidden ? 30000 : 2000);
+}
+document.addEventListener('visibilitychange', () => { if (token && !document.hidden) tick(); schedule(); });
+async function connectLive() {
+  try {
+    const { room } = await api('/room');
+    rt = rt || window.supabase.createClient(SB_URL, SB_ANON);
+    if (channel) rt.removeChannel(channel);
+    channel = rt.channel(room)
+      .on('broadcast', { event: 'changed' }, ({ payload }) => { tick(); if (payload && payload.kind === 'files') loadFiles(); })
+      .subscribe(status => { setLive(status === 'SUBSCRIBED'); schedule(); });
+  } catch (e) { setLive(false); }
+}
 
 $('#lf').onsubmit = async e => {
   e.preventDefault();
