@@ -1,0 +1,170 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>Relay</title>
+<style>
+  :root { --bg:#0e1116; --panel:#171b22; --line:#2a303b; --text:#e6e9ef; --dim:#8b93a3; --accent:#4f8cff; --me:#1f3b6e; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:15px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  .hidden { display:none !important; }
+  #login { max-width:340px; margin:20vh auto; padding:16px; text-align:center; }
+  input, button, textarea { font:inherit; color:var(--text); background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:10px 12px; }
+  button { background:var(--accent); border-color:var(--accent); color:#fff; cursor:pointer; }
+  button.ghost { background:transparent; color:var(--dim); border-color:var(--line); }
+  #app { display:grid; grid-template-columns: 1fr 320px; height:100vh; }
+  @media (max-width:760px) { #app { grid-template-columns:1fr; grid-template-rows: 1fr auto; } #side { max-height:40vh; } }
+  #chat { display:flex; flex-direction:column; min-height:0; border-right:1px solid var(--line); }
+  header { display:flex; gap:8px; align-items:center; padding:10px 16px; border-bottom:1px solid var(--line); }
+  header b { flex:1; }
+  header input { width:90px; padding:6px 8px; }
+  #msgs { flex:1; overflow-y:auto; padding:16px; display:flex; flex-direction:column; gap:8px; }
+  .m { max-width:75%; padding:8px 12px; border-radius:10px; background:var(--panel); white-space:pre-wrap; word-break:break-word; }
+  .m.me { align-self:flex-end; background:var(--me); }
+  .m small { display:block; color:var(--dim); font-size:12px; }
+  form#send { display:flex; gap:8px; padding:12px 16px; border-top:1px solid var(--line); }
+  form#send textarea { flex:1; resize:none; height:44px; }
+  #side { display:flex; flex-direction:column; min-height:0; }
+  #drop { margin:12px; padding:24px 12px; border:2px dashed var(--line); border-radius:10px; text-align:center; color:var(--dim); cursor:pointer; }
+  #drop.over { border-color:var(--accent); color:var(--text); }
+  #prog { margin:0 12px; color:var(--dim); font-size:13px; min-height:18px; }
+  #files { flex:1; overflow-y:auto; padding:0 12px 12px; }
+  .f { display:flex; align-items:center; gap:8px; padding:8px 4px; border-bottom:1px solid var(--line); }
+  .f a { flex:1; color:var(--accent); text-decoration:none; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; cursor:pointer; }
+  .f span { color:var(--dim); font-size:12px; white-space:nowrap; }
+  .f button { padding:2px 8px; font-size:12px; }
+</style>
+</head>
+<body>
+<div id="login">
+  <h2>Relay</h2>
+  <form id="lf"><input id="pw" type="password" placeholder="password" autocomplete="off" autofocus style="width:100%"><br><br>
+  <button style="width:100%">Enter</button></form>
+  <p id="lerr" style="color:#ff6b6b"></p>
+</div>
+
+<div id="app" class="hidden">
+  <section id="chat">
+    <header><b>Relay</b> name <input id="who"> <button class="ghost" id="out">Log out</button></header>
+    <div id="msgs"></div>
+    <form id="send"><textarea id="txt" placeholder="Message (Enter to send, Shift+Enter newline)"></textarea><button>Send</button></form>
+  </section>
+  <aside id="side">
+    <div id="drop">Drop files here or click to pick (max 50MB each)</div>
+    <input type="file" id="pick" multiple class="hidden">
+    <div id="prog"></div>
+    <div id="files"></div>
+  </aside>
+</div>
+
+<script>
+const API = 'https://cdzfidmmdscwskxjjnjn.supabase.co/functions/v1/relay';
+const $ = s => document.querySelector(s);
+const store = {
+  get: k => { try { return sessionStorage.getItem(k); } catch { return null; } },
+  set: (k, v) => { try { v == null ? sessionStorage.removeItem(k) : sessionStorage.setItem(k, v); } catch {} },
+};
+let token = store.get('token'), lastId = 0, timer;
+const who = $('#who');
+who.value = (() => { try { return localStorage.getItem('who'); } catch { return null; } })()
+  || (/Windows/.test(navigator.userAgent) ? 'PC' : /Mac/.test(navigator.userAgent) ? 'Mac' : 'Phone');
+who.onchange = () => { try { localStorage.setItem('who', who.value); } catch {} };
+
+async function api(path, body) {
+  const r = await fetch(API + path, body === undefined
+    ? { headers: { 'x-relay-token': token || '' } }
+    : { method: 'POST', headers: { 'x-relay-token': token || '', 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  if (r.status === 401) { logout(); throw new Error('login'); }
+  const d = await r.json();
+  if (!r.ok) throw new Error(d.error || r.status);
+  return d;
+}
+function logout() { token = null; store.set('token', null); clearInterval(timer); $('#app').classList.add('hidden'); $('#login').classList.remove('hidden'); }
+function showApp() { $('#login').classList.add('hidden'); $('#app').classList.remove('hidden'); lastId = 0; $('#msgs').innerHTML = ''; tick(); loadFiles(); timer = setInterval(tick, 2000); }
+
+$('#lf').onsubmit = async e => {
+  e.preventDefault();
+  $('#lerr').textContent = '…';
+  const r = await fetch(API + '/login', { method:'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ password: $('#pw').value }) });
+  const d = await r.json().catch(() => ({ error: 'network error' }));
+  if (d.token) { token = d.token; store.set('token', token); $('#pw').value = ''; $('#lerr').textContent = ''; showApp(); }
+  else $('#lerr').textContent = d.error;
+};
+$('#out').onclick = logout;
+
+let busy = false;
+async function tick() {
+  if (busy) return; busy = true;
+  try {
+    const list = await api('/messages?since=' + lastId);
+    const box = $('#msgs'), first = lastId === 0, atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 60;
+    for (const m of list) {
+      const d = document.createElement('div');
+      d.className = 'm' + (m.sender === who.value ? ' me' : '');
+      const s = document.createElement('small');
+      s.textContent = m.sender + ' · ' + new Date(m.created_at).toLocaleTimeString();
+      d.append(s, document.createTextNode(m.body));
+      box.append(d);
+      lastId = m.id;
+      if (m.file && !first) loadFiles();
+    }
+    if (list.length && (atBottom || first)) box.scrollTop = box.scrollHeight;
+  } catch (e) {} finally { busy = false; }
+}
+
+$('#send').onsubmit = async e => {
+  e.preventDefault();
+  const text = $('#txt').value.trim();
+  if (!text) return;
+  $('#txt').value = '';
+  await api('/messages', { text, from: who.value });
+  tick();
+};
+$('#txt').onkeydown = e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); $('#send').requestSubmit(); } };
+
+function fmt(n) { return n < 1024 ? n + ' B' : n < 1048576 ? (n/1024).toFixed(1) + ' KB' : (n/1048576).toFixed(1) + ' MB'; }
+async function loadFiles() {
+  const list = await api('/files');
+  const box = $('#files'); box.innerHTML = '';
+  for (const f of list) {
+    const row = document.createElement('div'); row.className = 'f';
+    const a = document.createElement('a'); a.textContent = f.name; a.title = 'Download ' + f.name;
+    a.onclick = async () => { const { url } = await api('/download-url', { name: f.name }); location.href = url; };
+    const s = document.createElement('span'); s.textContent = fmt(f.size);
+    const del = document.createElement('button'); del.className = 'ghost'; del.textContent = '✕'; del.title = 'Delete';
+    del.onclick = async () => { if (confirm('Delete ' + f.name + '?')) { await api('/delete', { name: f.name }); loadFiles(); } };
+    row.append(a, s, del); box.append(row);
+  }
+}
+
+async function upload(file) {
+  if (file.size > 50 * 1048576) { $('#prog').textContent = `✗ ${file.name}: over 50MB`; return; }
+  try {
+    const { name, url } = await api('/upload-url', { name: file.name });
+    await new Promise((res, rej) => {
+      const x = new XMLHttpRequest();
+      x.open('PUT', url);
+      x.setRequestHeader('Content-Type', file.type || 'application/octet-stream');
+      x.upload.onprogress = e => { $('#prog').textContent = `${file.name}: ${Math.round(e.loaded / e.total * 100)}%`; };
+      x.onload = () => x.status < 300 ? res() : rej(new Error(x.responseText || x.status));
+      x.onerror = () => rej(new Error('network error'));
+      x.send(file);
+    });
+    await api('/messages', { text: '📎 sent file: ' + name, from: who.value, file: name });
+    $('#prog').textContent = `✓ ${name}`;
+  } catch (e) { $('#prog').textContent = `✗ ${file.name}: ${e.message}`; }
+}
+async function uploadAll(files) { for (const f of files) await upload(f); loadFiles(); tick(); }
+const drop = $('#drop');
+drop.onclick = () => $('#pick').click();
+$('#pick').onchange = e => { uploadAll([...e.target.files]); e.target.value = ''; };
+drop.ondragover = e => { e.preventDefault(); drop.classList.add('over'); };
+drop.ondragleave = () => drop.classList.remove('over');
+drop.ondrop = e => { e.preventDefault(); drop.classList.remove('over'); uploadAll([...e.dataTransfer.files]); };
+
+if (token) showApp();
+</script>
+</body>
+</html>
