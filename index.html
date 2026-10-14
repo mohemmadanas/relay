@@ -52,7 +52,7 @@
     <form id="send"><textarea id="txt" placeholder="Message (Enter to send, Shift+Enter newline)"></textarea><button>Send</button></form>
   </section>
   <aside id="side">
-    <div id="drop">Drop files here or click to pick (max 50MB each)</div>
+    <div id="drop">Drop files here or click to pick (up to 1GB)</div>
     <input type="file" id="pick" multiple class="hidden">
     <div id="prog"></div>
     <div id="files"></div>
@@ -131,7 +131,7 @@ async function loadFiles() {
   for (const f of list) {
     const row = document.createElement('div'); row.className = 'f';
     const a = document.createElement('a'); a.textContent = f.name; a.title = 'Download ' + f.name;
-    a.onclick = async () => { const { url } = await api('/download-url', { name: f.name }); location.href = url; };
+    a.onclick = () => download(f);
     const s = document.createElement('span'); s.textContent = fmt(f.size);
     const del = document.createElement('button'); del.className = 'ghost'; del.textContent = '✕'; del.title = 'Delete';
     del.onclick = async () => { if (confirm('Delete ' + f.name + '?')) { await api('/delete', { name: f.name }); loadFiles(); } };
@@ -139,22 +139,59 @@ async function loadFiles() {
   }
 }
 
+function put(url, blob, onprog) {
+  return new Promise((res, rej) => {
+    const x = new XMLHttpRequest();
+    x.open('PUT', url);
+    x.setRequestHeader('Content-Type', 'application/octet-stream');
+    x.upload.onprogress = e => onprog(e.loaded);
+    x.onload = () => x.status < 300 ? res() : rej(new Error(x.responseText || x.status));
+    x.onerror = () => rej(new Error('network error'));
+    x.send(blob);
+  });
+}
 async function upload(file) {
-  if (file.size > 50 * 1048576) { $('#prog').textContent = `✗ ${file.name}: over 50MB`; return; }
+  let name;
   try {
-    const { name, url } = await api('/upload-url', { name: file.name });
-    await new Promise((res, rej) => {
-      const x = new XMLHttpRequest();
-      x.open('PUT', url);
-      x.setRequestHeader('Content-Type', file.type || 'application/octet-stream');
-      x.upload.onprogress = e => { $('#prog').textContent = `${file.name}: ${Math.round(e.loaded / e.total * 100)}%`; };
-      x.onload = () => x.status < 300 ? res() : rej(new Error(x.responseText || x.status));
-      x.onerror = () => rej(new Error('network error'));
-      x.send(file);
-    });
+    const r = await api('/upload-url', { name: file.name, size: file.size });
+    name = r.name;
+    let done = 0;
+    for (let i = 0; i < r.urls.length; i++) {
+      const blob = file.slice(i * r.chunk, (i + 1) * r.chunk);
+      for (let attempt = 1; ; attempt++) {
+        try {
+          await put(r.urls[i], blob, n => { $('#prog').textContent = `${file.name}: ${Math.round((done + n) / Math.max(file.size, 1) * 100)}%`; });
+          break;
+        } catch (e) { if (attempt >= 3) throw e; }
+      }
+      done += blob.size;
+    }
+    await api('/upload-done', { name });
     await api('/messages', { text: '📎 sent file: ' + name, from: who.value, file: name });
     $('#prog').textContent = `✓ ${name}`;
-  } catch (e) { $('#prog').textContent = `✗ ${file.name}: ${e.message}`; }
+  } catch (e) {
+    if (name) api('/delete', { name }).catch(() => {});
+    $('#prog').textContent = `✗ ${file.name}: ${e.message}`;
+  }
+}
+async function download(f) {
+  try {
+    const { urls } = await api('/download-url', { name: f.name });
+    if (urls.length === 1) { location.href = urls[0]; return; }
+    const parts = [];
+    for (let i = 0; i < urls.length; i++) {
+      $('#prog').textContent = `⬇ ${f.name}: part ${i + 1}/${urls.length}`;
+      const r = await fetch(urls[i]);
+      if (!r.ok) throw new Error('part ' + (i + 1) + ' failed');
+      parts.push(await r.blob());
+    }
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob(parts));
+    a.download = f.name;
+    document.body.append(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 60000);
+    $('#prog').textContent = `✓ downloaded ${f.name}`;
+  } catch (e) { $('#prog').textContent = `✗ ${f.name}: ${e.message}`; }
 }
 async function uploadAll(files) { for (const f of files) await upload(f); loadFiles(); tick(); }
 const drop = $('#drop');
