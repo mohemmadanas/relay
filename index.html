@@ -61,7 +61,7 @@
   </aside>
 </div>
 
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.49.4/dist/umd/supabase.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.49.4/dist/umd/supabase.min.js" integrity="sha384-2zrRDgDHSYB/GN3nFW3fsZXoxEhKIr3N2h63Tc6DEOB9JJdFIu8xMJT2Cph/gBil" crossorigin="anonymous"></script>
 <script>
 // Public anon key: only opens the content-free "changed" channel; tables and files are locked to the API.
 const SB_URL = 'https://cdzfidmmdscwskxjjnjn.supabase.co';
@@ -144,14 +144,15 @@ $('#send').onsubmit = async e => {
   const text = $('#txt').value.trim();
   if (!text) return;
   $('#txt').value = '';
-  await api('/messages', { text, from: who.value });
-  tick();
+  try { await api('/messages', { text, from: who.value }); tick(); }
+  catch (e) { if (!$('#txt').value) $('#txt').value = text; $('#prog').textContent = '✗ message not sent: ' + e.message; }
 };
 $('#txt').onkeydown = e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); $('#send').requestSubmit(); } };
 
 function fmt(n) { return n < 1024 ? n + ' B' : n < 1048576 ? (n/1024).toFixed(1) + ' KB' : (n/1048576).toFixed(1) + ' MB'; }
 async function loadFiles() {
-  const list = await api('/files');
+  let list;
+  try { list = await api('/files'); } catch (e) { return; }
   const box = $('#files'); box.innerHTML = '';
   for (const f of list) {
     const row = document.createElement('div'); row.className = 'f';
