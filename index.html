@@ -14,8 +14,8 @@
   input, button, textarea { font:inherit; color:var(--text); background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:10px 12px; }
   button { background:var(--accent); border-color:var(--accent); color:#fff; cursor:pointer; }
   button.ghost { background:transparent; color:var(--dim); border-color:var(--line); }
-  #app { display:grid; grid-template-columns: 1fr 320px; height:100vh; }
-  @media (max-width:760px) { #app { grid-template-columns:1fr; grid-template-rows: 1fr auto; } #side { max-height:40vh; } }
+  #app { display:grid; grid-template-columns: 1fr 320px; height:100vh; height:100dvh; }
+  #tabs, #att, .only-touch { display:none; }
   #chat { display:flex; flex-direction:column; min-height:0; border-right:1px solid var(--line); }
   header { display:flex; flex-wrap:wrap; gap:8px; align-items:center; padding:10px 16px; border-bottom:1px solid var(--line); }
   header b { flex:1; }
@@ -49,8 +49,33 @@
   #pvbody iframe { width:100%; height:100%; border:0; background:#fff; border-radius:6px; }
   #pvbody pre { width:100%; max-height:100%; margin:0; overflow:auto; padding:12px; border-radius:8px; background:var(--panel); color:var(--text); white-space:pre-wrap; word-break:break-word; }
   #pvbody audio { width:min(520px, 100%); }
-  .nav { position:absolute; top:50%; transform:translateY(-50%); padding:10px 16px; font-size:24px; background:rgba(23,27,34,.85); }
+  button.nav { position:absolute; top:50%; transform:translateY(-50%); padding:10px 16px; font-size:24px; background:rgba(23,27,34,.85); }
   #prev { left:12px; } #next { right:12px; }
+  @media (hover:none) { .only-mouse { display:none; } .only-touch { display:inline; } #drop:hover { border-color:var(--line); color:var(--dim); } }
+  /* Phone: one panel at a time (Chat | Files tabs), 16px inputs so iOS doesn't zoom, bigger touch targets. */
+  @media (max-width:760px) {
+    input, textarea { font-size:16px; }
+    #app { display:flex; flex-direction:column; }
+    #tabs { display:flex; border-bottom:1px solid var(--line); }
+    #tabs button { flex:1; padding:12px; border:0; border-bottom:2px solid transparent; border-radius:0; background:transparent; color:var(--dim); }
+    #tabs button.on { color:var(--text); border-bottom-color:var(--accent); }
+    #fbadge { color:var(--accent); }
+    #chat, #side { flex:1; min-height:0; border:0; }
+    #app:not(.files) #side, #app.files #chat { display:none; }
+    header { padding:8px 12px; gap:6px; }
+    header .lbl { display:none; }
+    header input { width:80px; }
+    header button { padding:6px 10px; font-size:14px; }
+    #msgs { padding:12px; }
+    .m { max-width:85%; }
+    form#send { padding:8px 12px; }
+    #att { display:block; padding:10px 12px; }
+    #drop { min-height:0; padding:18px 12px; }
+    .f { padding:6px 4px; }
+    .f a { padding:8px 0; }
+    .f button { padding:8px 12px; font-size:14px; }
+    #pvinfo { display:none; }
+  }
 </style>
 </head>
 <body>
@@ -62,13 +87,14 @@
 </div>
 
 <div id="app" class="hidden">
+  <nav id="tabs"><button id="tchat" class="on">Chat</button><button id="tfiles">Files <span id="fbadge" class="hidden">●</span></button></nav>
   <section id="chat">
-    <header><b>Relay</b> <span id="live" title="live = instant updates; polling = checks every few seconds">● polling</span> name <input id="who"> <button class="ghost" id="clear" title="Delete all messages for everyone (files stay)">Clear chat</button> <button class="ghost" id="out">Log out</button></header>
+    <header><b>Relay</b> <span id="live" title="live = instant updates; polling = checks every few seconds">● polling</span> <span class="lbl">name</span> <input id="who" placeholder="name"> <button class="ghost" id="clear" title="Delete all messages for everyone (files stay)">Clear chat</button> <button class="ghost" id="out">Log out</button></header>
     <div id="msgs"></div>
-    <form id="send"><textarea id="txt" placeholder="Message (Enter to send, Shift+Enter newline)"></textarea><button>Send</button></form>
+    <form id="send"><button type="button" class="ghost" id="att" title="Send a file">📎</button><textarea id="txt" placeholder="Message (Enter to send, Shift+Enter newline)"></textarea><button>Send</button></form>
   </section>
   <aside id="side">
-    <div id="drop"><span class="big">⬆</span><b>Drop files anywhere</b><span>or click here to pick (up to 1GB each)</span></div>
+    <div id="drop"><span class="big">⬆</span><b class="only-mouse">Drop files anywhere</b><span class="only-mouse">or click here to pick (up to 1GB each)</span><b class="only-touch">Tap to upload files</b><span class="only-touch">up to 1GB each</span></div>
     <input type="file" id="pick" multiple class="hidden">
     <div id="prog"></div>
     <div id="files"></div>
@@ -98,7 +124,7 @@ const store = {
 let token = store.get('token'), lastId = 0, timer, rt, channel, live = false;
 const who = $('#who');
 who.value = (() => { try { return localStorage.getItem('who'); } catch { return null; } })()
-  || (/Windows/.test(navigator.userAgent) ? 'PC' : /Mac/.test(navigator.userAgent) ? 'Mac' : 'Phone');
+  || (/iPhone|iPad|Android|Mobile/.test(navigator.userAgent) ? 'Phone' : /Windows/.test(navigator.userAgent) ? 'PC' : /Mac/.test(navigator.userAgent) ? 'Mac' : 'Phone');
 who.onchange = () => { try { localStorage.setItem('who', who.value); } catch {} };
 
 async function api(path, body) {
@@ -158,7 +184,7 @@ async function tick() {
       if (m.file) { d.classList.add('file'); d.title = 'Open ' + m.file; d.onclick = () => openFile(m.file); }
       box.append(d);
       lastId = m.id;
-      if (m.file && !first) loadFiles();
+      if (m.file && !first) { loadFiles(); if (!$('#app').classList.contains('files')) $('#fbadge').classList.remove('hidden'); }
     }
     if (list.length && (atBottom || first)) box.scrollTop = box.scrollHeight;
   } catch (e) {} finally { busy = false; }
@@ -177,7 +203,10 @@ $('#clear').onclick = async () => {
   try { await api('/clear-chat', { from: who.value }); tick(); }
   catch (e) { $('#prog').textContent = '✗ clear failed: ' + e.message; }
 };
-$('#txt').onkeydown = e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); $('#send').requestSubmit(); } };
+// Touch keyboards: Enter = newline, Send button sends.
+const touch = matchMedia('(hover:none)').matches;
+if (touch) $('#txt').placeholder = 'Message';
+$('#txt').onkeydown = e => { if (e.key === 'Enter' && !e.shiftKey && !touch) { e.preventDefault(); $('#send').requestSubmit(); } };
 
 function fmt(n) { return n < 1024 ? n + ' B' : n < 1048576 ? (n/1024).toFixed(1) + ' KB' : (n/1048576).toFixed(1) + ' MB'; }
 let files = [];
@@ -349,6 +378,26 @@ document.addEventListener('keydown', e => {
   else if (e.key === 'ArrowLeft') step(-1);
   else if (e.key === 'ArrowRight') step(1);
 });
+// Swipe left/right in preview = next/prev (single finger only, so pinch-zoom doesn't page).
+let sx = null, sy = 0;
+$('#pvbody').addEventListener('touchstart', e => { const t = e.touches[0]; sx = e.touches.length > 1 ? null : t.clientX; sy = t.clientY; }, { passive: true });
+$('#pvbody').addEventListener('touchend', e => {
+  if (sx === null || e.touches.length) return;
+  const t = e.changedTouches[0], dx = t.clientX - sx, dy = t.clientY - sy;
+  sx = null;
+  if (Math.abs(dx) > 60 && Math.abs(dy) < 50) step(dx < 0 ? 1 : -1);
+}, { passive: true });
+// Phone tabs. Hidden #msgs can't scroll, so jump to the bottom when Chat comes back.
+function tab(showFiles) {
+  $('#app').classList.toggle('files', showFiles);
+  $('#tchat').classList.toggle('on', !showFiles);
+  $('#tfiles').classList.toggle('on', showFiles);
+  if (showFiles) $('#fbadge').classList.add('hidden');
+  else { const box = $('#msgs'); box.scrollTop = box.scrollHeight; }
+}
+$('#tchat').onclick = () => tab(false);
+$('#tfiles').onclick = () => tab(true);
+$('#att').onclick = () => { tab(true); $('#pick').click(); };
 async function uploadAll(files) { for (const f of files) await upload(f); loadFiles(); tick(); }
 const drop = $('#drop');
 drop.onclick = () => $('#pick').click();
